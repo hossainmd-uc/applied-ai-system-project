@@ -3,48 +3,36 @@ Command line runner for the Music Recommender Simulation.
 
 This file helps you quickly run and test your recommender.
 
-You will implement the functions in recommender.py:
-- load_songs
-- score_song
-- recommend_songs
+Phase 3 adds a terminal menu for quick recommendations and a guided agent loop.
 """
 
 try:
-    from .recommender import load_songs, recommend_songs
+    from .agent_interface import run_guided_agent, run_quick_recommendation
+    from .recommender import load_songs
 except ImportError:
     # Fallback for direct execution: python src/main.py
-    from recommender import load_songs, recommend_songs
+    from agent_interface import run_guided_agent, run_quick_recommendation
+    from recommender import load_songs
 
 
 def main() -> None:
     songs = load_songs("data/songs.csv")
 
-    # Starter example profile
-    user_prefs = {
-        "genre": "pop",
-        "mood": "happy",
-        "energy": 0.80,
-        "acousticness": 0.20,  # or use "likes_acoustic": False
-        "tempo_bpm": 120.0,  # optional
-        "danceability": 0.78,  # optional
-        "valence": 0.82,  # optional
-    }
+    while True:
+        print("\nVibeFinder")
+        print("1) Quick Recommend")
+        print("2) Guided Agent")
+        print("3) Exit")
 
-    recommendations = recommend_songs(user_prefs, songs, k=5)
-
-    print("\nTop recommendations\n")
-    for idx, rec in enumerate(recommendations, start=1):
-        # You decide the structure of each returned item.
-        # A common pattern is: (song, score, explanation)
-        song, score, explanation = rec
-        reasons = [part.strip() for part in explanation.split("|") if part.strip()]
-
-        print(f"{idx}. {song['title']}")
-        print(f"   Final Score: {score:.3f}")
-        print("   Reasons:")
-        for reason in reasons:
-            print(f"   - {reason}")
-        print("-" * 60)
+        choice = input("Choose an option: ").strip()
+        if choice == "1":
+            run_quick_recommendation(songs)
+        elif choice == "2":
+            run_guided_agent(songs)
+        elif choice == "3":
+            break
+        else:
+            print("Please choose 1, 2, or 3.")
 
 
 if __name__ == "__main__":

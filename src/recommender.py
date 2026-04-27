@@ -197,12 +197,57 @@ class Recommender:
         self.songs = songs
 
     def recommend(self, user: UserProfile, k: int = 5) -> List[Song]:
-        # TODO: Implement recommendation logic
-        return self.songs[:k]
+        if k <= 0:
+            return []
+
+        user_prefs = _user_profile_to_prefs(user)
+        ranked_songs = sorted(
+            (
+                (song, score_song(user_prefs, _song_to_dict(song))[0])
+                for song in self.songs
+            ),
+            key=lambda item: (-item[1], item[0].id),
+        )
+        return [song for song, _ in ranked_songs[:k]]
 
     def explain_recommendation(self, user: UserProfile, song: Song) -> str:
-        # TODO: Implement explanation logic
-        return "Explanation placeholder"
+        user_prefs = _user_profile_to_prefs(user)
+        return score_song(user_prefs, _song_to_dict(song))[1]
+
+
+def _song_to_dict(song: Song) -> Dict[str, object]:
+    return {
+        "id": song.id,
+        "title": song.title,
+        "artist": song.artist,
+        "genre": song.genre,
+        "mood": song.mood,
+        "energy": song.energy,
+        "tempo_bpm": song.tempo_bpm,
+        "valence": song.valence,
+        "danceability": song.danceability,
+        "acousticness": song.acousticness,
+    }
+
+
+def _user_profile_to_prefs(user: UserProfile) -> Dict[str, object]:
+    prefs: Dict[str, object] = {
+        "genre": user.favorite_genre,
+        "mood": user.favorite_mood,
+        "energy": user.target_energy,
+        "likes_acoustic": user.likes_acoustic,
+        "weights": dict(user.feature_weights),
+        "sigmas": dict(user.feature_sigmas),
+    }
+    if user.target_acousticness is not None:
+        prefs["acousticness"] = user.target_acousticness
+    if user.target_tempo_bpm is not None:
+        prefs["tempo_bpm"] = user.target_tempo_bpm
+    if user.target_danceability is not None:
+        prefs["danceability"] = user.target_danceability
+    if user.target_valence is not None:
+        prefs["valence"] = user.target_valence
+    return prefs
 
 
 def load_songs(csv_path: str) -> List[Dict]:
