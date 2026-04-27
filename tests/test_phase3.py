@@ -1,14 +1,28 @@
 import pytest
 
-from src.agent_interface import run_guided_agent
+from src.agent_interface import run_guided_agent, run_quick_recommendation
 from src.rag_interface import (
+    RefinementPlan,
+    _intent_from_mapping,
     apply_refinement_plan,
     build_state_from_intent,
     clarification_question_for_type,
     extract_intent,
+    get_llm_guardrail_status,
     propose_refinement,
+    reset_llm_guardrails,
     retrieve_candidates,
 )
+
+
+@pytest.fixture(autouse=True)
+def disable_llm_for_unit_tests(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv("VIBEFINDER_SKIP_DOTENV", "true")
+    reset_llm_guardrails(clear_cache=True)
+    yield
+    reset_llm_guardrails(clear_cache=True)
 
 
 def test_extract_intent_maps_basic_descriptors():
@@ -117,6 +131,38 @@ def test_guided_agent_can_run_one_refinement_round():
     assert recommendations[0][0]["title"] == "Study Breeze"
 
 
+def test_quick_recommendation_prints_intent_diagnostics():
+    songs = [
+        {
+            "id": 1,
+            "title": "Study Breeze",
+            "artist": "Artist A",
+            "genre": "lofi",
+            "mood": "chill",
+            "energy": 0.35,
+            "tempo_bpm": 78,
+            "valence": 0.55,
+            "danceability": 0.60,
+            "acousticness": 0.82,
+        }
+    ]
+    outputs = []
+
+    run_quick_recommendation(
+        songs,
+        input_fn=lambda prompt: "calm lofi music",
+        output_fn=outputs.append,
+        candidate_limit=1,
+        recommendation_limit=1,
+    )
+
+    joined_output = "\n".join(outputs)
+    assert "Intent diagnostics" in joined_output
+    assert "Source: HEURISTIC" in joined_output
+    assert "Parsed scoring inputs:" in joined_output
+    assert "Ranking criteria weights:" in joined_output
+
+
 def test_refinement_plan_from_feedback_contains_updates_and_weight_hint():
     base_intent = extract_intent("chill lofi music")
     state = build_state_from_intent(base_intent)
@@ -153,10 +199,7 @@ def test_clarification_type_uses_fixed_templates_for_repeats():
     assert "genre" in first_prompt.lower() or "mood" in first_prompt.lower()
 
 
-def test_refinement_plan_uses_clarification_type(monkeypatch):
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-
+def test_refinement_plan_uses_clarification_type():
     base_intent = extract_intent("chill lofi music")
     state = build_state_from_intent(base_intent)
 
@@ -167,3 +210,47 @@ def test_refinement_plan_uses_clarification_type(monkeypatch):
     assert plan.clarifying_question == clarification_question_for_type(
         plan.clarification_type or "general"
     )
+
+
+def test_missing_api_key_does_not_consume_llm_call_budget():
+    intent = extract_intent("calm acoustic music")
+    status = get_llm_guardrail_status()
+
+    assert intent.notes == ["Gemini intent parsing unavailable: no API key configured."]
+    assert status["calls_made"] == 0
+    assert status["calls_remaining"] == status["max_calls_per_session"]
+
+
+def test_llm_mapping_rejects_unknown_categories_and_string_false_booleans():
+    intent = _intent_from_mapping(
+        "something weird",
+        {
+            "genre": "space polka",
+            "mood": "focused",
+            "avoid_intense": "false",
+            "prefer_chill": "true",
+            "prefer_acoustic": "no",
+            "confidence": 0.9,
+        },
+    )
+
+    assert intent.genre is None
+    assert intent.mood == "focused"
+    assert intent.avoid_intense is False
+    assert intent.prefer_chill is True
+    assert intent.prefer_acoustic is False
+    assert intent.source == "llm"
+    assert intent.llm_json is not None
+
+
+def test_apply_refinement_plan_ignores_invalid_category_and_string_false_bool():
+    state = build_state_from_intent(extract_intent("chill lofi music"))
+    plan = RefinementPlan(
+        suggested_updates={"genre": "space polka", "prefer_acoustic": "false"}
+    )
+
+    updated_state, change_log = apply_refinement_plan(state, plan)
+
+    assert updated_state.genre == state.genre
+    assert updated_state.prefer_acoustic is False
+    assert "genre -> space polka" not in change_log

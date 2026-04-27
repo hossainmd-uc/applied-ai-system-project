@@ -14,3 +14,6 @@ venv/
 
 # Pytest cache
 .pytest_cache/
+
+# Local LLM debug output
+.vibefinder_llm_debug.jsonl

@@ -1,31 +1,170 @@
-# 🎵 Music Recommender Simulation
+# VibeFinder: AI-Assisted Music Recommender
 
-## Project Summary
+## Title And Summary
 
-In this project you will build and explain a small music recommender system.
+VibeFinder is a terminal-based music recommender that turns a natural language request into ranked song recommendations. It matters because it shows how an AI system can combine an LLM with a transparent scoring model, so the user can see not only the final songs but also why those songs were chosen.
 
-My version uses a weighted, content-based scoring system. The recommender compares a user profile against each song in the catalog, gives the most important fields the largest weights, and then ranks songs by their overall relevance score.
+The original project from Modules 1-3 was a **Music Recommender Simulation**. Its goal was to recommend songs from a small CSV catalog by comparing a user's preferences against song features like genre, mood, energy, tempo, valence, danceability, and acousticness. The original version used a weighted content-based scoring system; this final version keeps that recommender as the core and adds an LLM-powered terminal interface on top of it.
 
-Your goal is to:
+## Architecture Overview
 
-- Represent songs and a user "taste profile" as data
-- Design a scoring rule that turns that data into recommendations
-- Evaluate what your system gets right and wrong
-- Reflect on how this mirrors real world AI recommenders
+VibeFinder uses one shared recommendation workflow with two user modes:
 
-Replace this paragraph with your own summary of what your version does.
+- `Quick Recommend`: the user enters one request and gets recommendations immediately.
+- `Guided Agent`: the user can refine the results across multiple turns.
 
----
+Both modes use the same backend. The guided mode is more iterative, but it reuses the same intent extraction, retrieval, and ranking steps as quick mode.
 
-## How The System Works
+```text
+User prompt
+   |
+   v
+Terminal menu in src/main.py
+   |
+   v
+src/agent_interface.py
+   |
+   v
+src/rag_interface.py
+   - Uses Gemini when available
+   - Falls back to heuristic parsing when needed
+   - Converts natural language into structured intent
+   - Retrieves likely candidates from data/songs.csv
+   |
+   v
+src/recommender.py
+   - Scores songs with weighted feature matching
+   - Returns ranked recommendations and explanations
+```
 
-Explain your design in plain language.
+The LLM does not directly choose the final songs. Instead, it converts the user's request into structured fields such as `genre`, `mood`, `energy`, and `valence`. The existing recommender then scores songs using those fields. This makes the system easier to debug because the output shows the LLM JSON, the parsed scoring inputs, and the final ranking reasons.
 
-Some prompts to answer:
+## Setup Instructions
 
-### Song Features
+1. Create and activate a virtual environment:
 
-Each song is represented using the available fields in `data/songs.csv`:
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
+
+2. Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+3. Add a Gemini API key in a local `.env` file:
+
+```bash
+GEMINI_API_KEY=your_api_key_here
+```
+
+You can also use `GOOGLE_API_KEY` instead. The app still works without an API key, but it will use the heuristic fallback instead of the LLM.
+
+4. Run the app:
+
+```bash
+python -m src.main
+```
+
+5. Run tests:
+
+```bash
+pytest
+```
+
+## Sample Interactions
+
+### Example 1: Guided Agent With LLM
+
+Input:
+
+```text
+Looking for poppy upbeat and happy songs
+```
+
+Observed AI interpretation:
+
+```json
+{
+  "genre": "pop",
+  "mood": "happy",
+  "energy": 0.8,
+  "valence": 0.9,
+  "prefer_chill": false,
+  "prefer_acoustic": false,
+  "confidence": 0.9
+}
+```
+
+Result:
+
+```text
+1. Sunrise City - Neon Echo
+   Final Score: 0.993
+   Reasons:
+   - Genre match: +0.25 points
+   - Mood match: +0.20 points
+   - Energy closeness (target 0.80, song 0.82): +0.20 points
+   - Acousticness closeness (target 0.20, song 0.18): +0.15 points
+   - Valence closeness (target 0.90, song 0.84): +0.03 points
+```
+
+Screenshots from this successful run:
+
+- [Intent diagnostics](Screenshots/image3.png)
+- [Ranked recommendations](Screenshots/image4.png)
+
+### Example 2: Quick Recommend With Fallback
+
+Input:
+
+```text
+I want a spacey calm vibey song
+```
+
+During testing, Gemini returned malformed JSON, so VibeFinder safely fell back to the heuristic parser. The system still returned recommendations instead of crashing. The top result was:
+
+```text
+1. Spacewalk Thoughts - Orbit Bloom
+   Final Score: 0.242
+```
+
+This test helped reveal why structured LLM output matters. After this, I increased the Gemini output budget, disabled thinking for JSON extraction, added response schemas, and added intent diagnostics so the user can see whether the result came from `LLM` or `HEURISTIC`.
+
+### Example 3: Heuristic Mode Without API Key
+
+If no API key is available, the system still works:
+
+```text
+Note
+- Gemini intent parsing unavailable: no API key configured.
+
+Intent diagnostics
+Source: HEURISTIC
+Parsed scoring inputs:
+- genre: lofi
+- energy: 0.25
+- acousticness: 0.7
+- likes_acoustic: True
+```
+
+This fallback matters because the app remains usable even when the external LLM is unavailable, rate-limited, or returns bad output.
+
+## Design Decisions
+
+I built VibeFinder as a two-part system that relies on the same workflow. The quick mode is for users who want an immediate answer. The guided mode is more iterative and reflective, but it still reuses the same core steps: understand the request, retrieve likely candidates, rank songs, and explain the results.
+
+The inspiration for this design came from what I thought users would actually find useful. Sometimes a user only wants a fast recommendation. Other times, they may want to explore and adjust the recommendation, especially if the first result is close but not quite right. Instead of building two separate systems, I kept one shared backend and gave it two interaction styles.
+
+A major design trade-off was keeping the recommender transparent instead of letting the LLM directly pick songs. The LLM is good at understanding vague language like "poppy upbeat and happy," but it can also be unpredictable. By forcing the LLM to produce structured JSON and then passing that JSON into the existing scoring model, the system becomes easier to inspect and debug.
+
+Another trade-off is that the catalog is small, so a complicated retrieval system would be unnecessary. I used lightweight RAG-style retrieval over the CSV catalog: the system first selects likely candidates using simple similarity signals, then the shared recommender ranks those candidates with weighted scoring.
+
+## How Scoring Works
+
+Each song has features from `data/songs.csv`, including:
 
 - `genre`
 - `mood`
@@ -35,24 +174,7 @@ Each song is represented using the available fields in `data/songs.csv`:
 - `danceability`
 - `acousticness`
 
-### User Profile
-
-The `UserProfile` stores the user's preference ratings for each field. In this system, the most important preferences are the baseline comparison fields:
-
-- `genre`
-- `mood`
-- `energy`
-- `acousticness`
-
-Users can also provide optional preferences for:
-
-- `tempo_bpm`
-- `danceability`
-- `valence`
-
-### Weighting Strategy
-
-The recommender uses a weighted system so that the most important fields influence the final score more strongly than the less important fields. A reasonable starting set of weights is:
+The ranking weights are:
 
 - `genre = 0.25`
 - `mood = 0.20`
@@ -62,235 +184,72 @@ The recommender uses a weighted system so that the most important fields influen
 - `danceability = 0.07`
 - `valence = 0.03`
 
-These weights can be adjusted, but the idea is that genre, mood, and energy matter most, while the remaining fields fine-tune the ranking.
+For genre and mood, the score is based on whether the song matches the user's target. For numeric fields like energy or valence, the score rewards songs that are close to the target instead of simply being higher or lower. The final score is a weighted combination of these feature scores.
 
-### Scoring Rule
+## Testing Summary
 
-For numerical features, the recommender rewards songs that are close to the user's preference rather than simply larger or smaller. The score for one feature is based on the distance between the song value and the user target:
+The project was tested in three ways:
 
-$$
-s_f = e^{-\frac{(x_f - p_f)^2}{2\sigma_f^2}}
-$$
+- Unit tests check the core recommender, Phase 3 intent parsing, retrieval, fallback behavior, and guided-agent state changes.
+- Manual terminal tests check whether the app feels usable from the user's point of view.
+- LLM diagnostics check whether Gemini output maps cleanly into the scoring inputs.
 
-Where:
+What worked:
 
-- $s_f$ = score for one feature
-- $x_f$ = the song's value for that feature
-- $p_f$ = the user's preferred value for that feature
-- $\sigma_f$ = how quickly the score drops as the song moves away from the user's preference
+- The shared ranking engine stayed stable while adding the LLM interface.
+- The fallback path worked when Gemini was unavailable or returned invalid JSON.
+- The new diagnostics made it clear whether a result came from the LLM or heuristic fallback.
+- The guided mode successfully used LLM output to produce explainable recommendations.
 
-This formula gives a score close to $1$ when the song matches the user's preference and a smaller score as the song gets farther away.
+What did not work at first:
 
-For categorical features like `genre` and `mood`, the recommender can assign a high score when the song matches the user's preference and a lower score when it does not.
+- The LLM output was initially too unstructured, which made it hard to map into the existing recommender.
+- Gemini once returned truncated JSON, causing parsing to fail.
+- The app originally did not clearly tell the user whether the LLM or heuristic path produced the recommendation.
 
-### Overall Relevance Score
+What I learned from testing:
 
-The final score is a weighted sum of all feature scores:
-
-$$
-R = \sum_i w_i s_i
-$$
-
-Where:
-
-- $R$ = overall relevance score
-- $w_i$ = importance weight for feature $i$
-- $s_i$ = score for feature $i$
-
-The result is normalized to a value from $0$ to $1$, where higher values mean the song is a better match for the user.
-
-### Recommendation Flow
-
-1. Compare each song against the user profile.
-2. Compute a score for each field.
-3. Multiply each field score by its weight.
-4. Add the weighted scores together to get the final relevance score.
-5. Sort songs from highest score to lowest score and return the top results.
-
-You can include a simple diagram or bullet list if helpful.
-
----
-
-## Getting Started
-
-### Setup
-
-1. Create a virtual environment (optional but recommended):
-
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate      # Mac or Linux
-   .venv\Scripts\activate         # Windows
-
-2. Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-3. Run the app:
-
-```bash
-python -m src.main
-```
-
-### Running Tests
-
-Run the starter tests with:
-
-```bash
-pytest
-```
-
-You can add more tests in `tests/test_recommender.py`.
-
----
-
-## Experiments You Tried
-
-Use this section to document the experiments you ran. For example:
-
-- What happened when you changed the weight on genre from 2.0 to 0.5
-- What happened when you added tempo or valence to the score
-- How did your system behave for different types of users
-
-Phase 2 A/B output screenshots:
-
-- Test 1 (decreased genre importance, increased energy importance): [Screenshots/image1.png](Screenshots/image1.png)
-- Test 2 (complementary setup: higher genre importance, lower energy importance): [Screenshots/image2.png](Screenshots/image2.png)
-
----
-
-## Limitations and Risks
-
-Summarize some limitations of your recommender.
-
-Examples:
-
-- It only works on a tiny catalog
-- It does not understand lyrics or language
-- It might over favor one genre or mood
-
-You will go deeper on this in your model card.
-
----
+- LLM output needs to be treated as untrusted input.
+- Structured input and output make AI systems much easier to debug.
+- A fallback path is important because external model calls can fail for reasons outside the app's control.
+- Explainability is not just a nice feature; it is what made the system possible to improve.
 
 ## Reflection
 
-Read and complete `model_card.md`:
+This project taught me that adding AI to an existing system is not just about calling an LLM. The harder part is deciding what role the LLM should play. In VibeFinder, the LLM is useful for translating natural language into structured preferences, but the final ranking is still handled by a transparent recommender. That separation made the system easier to reason about.
 
-[**Model Card**](model_card.md)
+I also learned how important it is to sanitize both inputs and expected outputs from an LLM. At first, there was not enough structure around the LLM response, so it was unclear how the model's interpretation connected to the final recommendations. Once I added structured JSON, validation, fallback behavior, and diagnostics, I could follow the chain of reasoning from the user's words to the parsed intent to the ranking score.
 
-Write 1 to 2 paragraphs here about what you learned:
+The biggest problem-solving lesson was that AI bugs can look mysterious until the system exposes its intermediate steps. Seeing the raw JSON, parsed fields, and scoring weights made the behavior much less obscure. It helped me understand that good AI systems need guardrails, not just intelligence.
 
-- about how recommenders turn data into predictions
-- about where bias or unfairness could show up in systems like this
+### Limitations And Biases
 
+VibeFinder is limited by the simplicity of its ranking system. It uses a weighted scoring model with Gaussian closeness for numeric fields, so the quality of recommendations depends heavily on the chosen weights and sigma thresholds. If those thresholds are too strict or too loose, the system may over-reward or under-reward certain song features.
 
----
+The dataset is also small, so the recommender can only suggest songs that already exist in `data/songs.csv`. This can create bias toward the genres, moods, and artists represented in that file. The LLM layer also has limits: it uses a free Gemini model, can hit rate limits, and may misunderstand vague prompts. Guided mode is helpful, but its clarifying questions are still based on predefined categories, so it cannot ask every possible follow-up question a human might ask.
 
-## 7. `model_card_template.md`
+### Misuse And Prevention
 
-Combines reflection and model card framing from the Module 3 guidance. :contentReference[oaicite:2]{index=2}  
+This AI could be misused by sending irrelevant, abusive, or excessive prompts. I cannot fully control what a user types, so the system has to assume that input may be unrelated to music or poorly formed.
 
-```markdown
-# 🎧 Model Card - Music Recommender Simulation
+To reduce risk, I added guardrails around the LLM calls: per-session call limits, cooldowns between calls, caching for repeated prompts, provider backoff after rate limits, and fallback behavior when the LLM fails. The system also avoids exposing the API key and only logs sanitized debug information. Since this is a classroom music recommender, the main misuse risk is API abuse or over-trusting weak recommendations, not high-stakes harm.
 
-## 1. Model Name
+### Reliability Testing Surprise
 
-Give your recommender a name, for example:
+What surprised me most was that the system could seem broken even when the recommender itself was working. At first, I was confused by some outputs because I could not tell whether the LLM or heuristic fallback had produced the recommendation. Once I printed the source, raw JSON, parsed scoring inputs, ranking weights, and recommendation reasons, the behavior became much easier to understand.
 
-> VibeFinder 1.0
+I was also surprised by how much structure improved reliability. When the LLM output was unstructured, it was hard to map its answer into the existing scoring functions. After adding JSON schemas, validation, and diagnostics, the LLM became much easier to use in an iterative workflow. One unexpected issue was that Gemini returned truncated JSON until I adjusted the output budget and disabled thinking for the small extraction task.
 
----
+### Collaboration With AI
 
-## 2. Intended Use
+I used AI as a debugging and planning partner during this project. One very helpful suggestion was to inspect the full LLM path instead of assuming the problem was only rate limiting. That helped identify several important issues: missing API keys could consume call budget, cooldown behavior was falling back too quickly, `429` errors needed clearer backoff handling, malformed JSON needed debug logging, and the terminal needed to show whether a result came from the LLM or heuristic fallback.
 
-- What is this system trying to do
-- Who is it for
+One flawed or incomplete suggestion happened earlier when the issue was framed mostly as a rate-limit problem. Rate limits were part of the concern, but the actual failure also involved JSON truncation and weak output structure. Some early guardrail ideas helped, but they did not fully solve the problem until the system added response schemas, better parsing, diagnostics, and safer fallback behavior. This taught me that AI suggestions are useful, but they still need to be tested against real program output.
 
-Example:
+## Future Improvements
 
-> This model suggests 3 to 5 songs from a small catalog based on a user's preferred genre, mood, and energy level. It is for classroom exploration only, not for real users.
-
----
-
-## 3. How It Works (Short Explanation)
-
-Describe your scoring logic in plain language.
-
-- What features of each song does it consider
-- What information about the user does it use
-- How does it turn those into a number
-
-Try to avoid code in this section, treat it like an explanation to a non programmer.
-
----
-
-## 4. Data
-
-Describe your dataset.
-
-- How many songs are in `data/songs.csv`
-- Did you add or remove any songs
-- What kinds of genres or moods are represented
-- Whose taste does this data mostly reflect
-
----
-
-## 5. Strengths
-
-Where does your recommender work well
-
-You can think about:
-- Situations where the top results "felt right"
-- Particular user profiles it served well
-- Simplicity or transparency benefits
-
----
-
-## 6. Limitations and Bias
-
-Where does your recommender struggle
-
-Some prompts:
-- Does it ignore some genres or moods
-- Does it treat all users as if they have the same taste shape
-- Is it biased toward high energy or one genre by default
-- How could this be unfair if used in a real product
-
----
-
-## 7. Evaluation
-
-How did you check your system
-
-Examples:
-- You tried multiple user profiles and wrote down whether the results matched your expectations
-- You compared your simulation to what a real app like Spotify or YouTube tends to recommend
-- You wrote tests for your scoring logic
-
-You do not need a numeric metric, but if you used one, explain what it measures.
-
----
-
-## 8. Future Work
-
-If you had more time, how would you improve this recommender
-
-Examples:
-
-- Add support for multiple users and "group vibe" recommendations
-- Balance diversity of songs instead of always picking the closest match
-- Use more features, like tempo ranges or lyric themes
-
----
-
-## 9. Personal Reflection
-
-A few sentences about what you learned:
-
-- What surprised you about how your system behaved
-- How did building this change how you think about real music recommenders
-- Where do you think human judgment still matters, even if the model seems "smart"
-
+- Improve the heuristic parser for vague words like "spacey," "vibey," and "dreamy."
+- Add more songs and more diverse genres to make recommendations more interesting.
+- Add artist diversity so the top results do not repeat the same artist too often.
+- Save manual test results in a more formal evaluation log.
+- Let users choose whether they want concise output or full diagnostic output.
