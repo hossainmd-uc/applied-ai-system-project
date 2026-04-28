@@ -163,6 +163,16 @@ def test_quick_recommendation_prints_intent_diagnostics():
     assert "Ranking criteria weights:" in joined_output
 
 
+def test_forced_heuristic_mode_skips_llm_notes_and_budget():
+    intent = extract_intent("poppy upbeat happy songs", mode="heuristic")
+    status = get_llm_guardrail_status()
+
+    assert intent.source == "heuristic"
+    assert intent.notes == []
+    assert intent.genre == "pop"
+    assert status["calls_made"] == 0
+
+
 def test_refinement_plan_from_feedback_contains_updates_and_weight_hint():
     base_intent = extract_intent("chill lofi music")
     state = build_state_from_intent(base_intent)

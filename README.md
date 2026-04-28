@@ -8,12 +8,14 @@ The original project from Modules 1-3 was a **Music Recommender Simulation**. It
 
 ## Architecture Overview
 
-VibeFinder uses one shared recommendation workflow with two user modes:
+VibeFinder uses one shared recommendation workflow with two interaction styles and two parsing modes:
 
 - `Quick Recommend`: the user enters one request and gets recommendations immediately.
 - `Guided Agent`: the user can refine the results across multiple turns.
+- `Heuristic`: uses the local keyword parser only.
+- `LLM`: uses Gemini first, with fallback behavior if the model call fails.
 
-Both modes use the same backend. The guided mode is more iterative, but it reuses the same intent extraction, retrieval, and ranking steps as quick mode.
+All four menu choices use the same backend. The guided mode is more iterative, but it reuses the same intent extraction, retrieval, and ranking steps as quick mode.
 
 ```text
 User prompt
@@ -115,6 +117,12 @@ Screenshots from this successful run:
 
 - [Intent diagnostics](Screenshots/image3.png)
 - [Ranked recommendations](Screenshots/image4.png)
+
+### Demo Video
+
+[![VibeFinder demo video thumbnail](Screenshots/video.png)](https://drive.google.com/file/d/1l60vakdngig98dCFil-BtqGAEky7xX71/view?usp=sharing)
+
+Click the thumbnail above to watch the project walkthrough video.
 
 ### Example 2: Quick Recommend With Fallback
 

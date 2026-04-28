@@ -166,6 +166,8 @@ _INTENT_CACHE: Dict[str, SearchIntent] = {}
 @dataclass
 class SearchIntent:
     query: str
+    source: str = "heuristic"
+    llm_json: Optional[Dict[str, Any]] = None
     genre: Optional[str] = None
     mood: Optional[str] = None
     energy: Optional[float] = None
@@ -247,25 +249,46 @@ class RefinementPlan:
     reason: str = ""
 
 
-def extract_intent(query: str) -> SearchIntent:
+def extract_intent(query: str, mode: str = "llm") -> SearchIntent:
     """Return structured intent using Gemini when available, else rules."""
 
+    normalized_mode = _normalize(mode)
+    if normalized_mode not in {"llm", "heuristic"}:
+        normalized_mode = "llm"
+
     normalized_query = _normalize_text(query)
-    if normalized_query in _INTENT_CACHE:
-        cached = _clone_intent(_INTENT_CACHE[normalized_query])
+    cache_key = f"{normalized_mode}:{normalized_query}"
+    if cache_key in _INTENT_CACHE:
+        cached = _clone_intent(_INTENT_CACHE[cache_key])
         cached.notes.append("Using cached intent result for this query.")
         return cached
 
+    if normalized_mode == "heuristic":
+        rule_intent = _extract_intent_with_rules(query)
+        _INTENT_CACHE[cache_key] = _clone_intent(rule_intent)
+        return rule_intent
+
     llm_intent, failure_note = _extract_intent_with_gemini(query)
     if llm_intent is not None:
-        _INTENT_CACHE[normalized_query] = _clone_intent(llm_intent)
+        _INTENT_CACHE[cache_key] = _clone_intent(llm_intent)
         return llm_intent
 
     rule_intent = _extract_intent_with_rules(query)
     if failure_note:
         rule_intent.notes.append(failure_note)
-    _INTENT_CACHE[normalized_query] = _clone_intent(rule_intent)
+    _INTENT_CACHE[cache_key] = _clone_intent(rule_intent)
     return rule_intent
+
+
+def reset_llm_guardrails(clear_cache: bool = False) -> None:
+    """Reset local LLM call counters for tests and new interactive sessions."""
+
+    global _LLM_CALL_COUNT, _LAST_LLM_CALL_MONOTONIC
+
+    _LLM_CALL_COUNT = 0
+    _LAST_LLM_CALL_MONOTONIC = 0.0
+    if clear_cache:
+        _INTENT_CACHE.clear()
 
 
 def get_llm_guardrail_status() -> Dict[str, object]:
@@ -341,8 +364,11 @@ def recommend_with_state(
 
 
 def propose_refinement(
-    state: RecommendationState, user_feedback: str
+    state: RecommendationState, user_feedback: str, mode: str = "llm"
 ) -> RefinementPlan:
+    if _normalize(mode) == "heuristic":
+        return _propose_refinement_with_rules(state, user_feedback)
+
     plan, failure_note = _propose_refinement_with_gemini(state, user_feedback)
     if plan is not None:
         return plan
@@ -379,7 +405,8 @@ def apply_refinement_plan(
             continue
 
         if key in {"genre", "mood"} and isinstance(value, str):
-            normalized = _normalize(value)
+            allowed_values = GENRE_KEYWORDS if key == "genre" else MOOD_KEYWORDS
+            normalized = _normalize_category(value, allowed_values)
             if normalized:
                 setattr(updated_state, key, normalized)
                 change_log.append(f"{key} -> {normalized}")
@@ -400,8 +427,10 @@ def apply_refinement_plan(
             continue
 
         if key in {"avoid_intense", "prefer_chill", "prefer_acoustic"}:
-            setattr(updated_state, key, bool(value))
-            change_log.append(f"{key} -> {bool(value)}")
+            parsed_bool = _to_bool(value)
+            if parsed_bool is not None:
+                setattr(updated_state, key, parsed_bool)
+                change_log.append(f"{key} -> {parsed_bool}")
 
     if plan.weight_hints:
         for feature, level in plan.weight_hints.items():
@@ -479,7 +508,7 @@ def score_retrieval_candidate(song: Dict, intent: SearchIntent) -> Tuple[float, 
 
 def _extract_intent_with_rules(query: str) -> SearchIntent:
     normalized = _normalize_text(query)
-    intent = SearchIntent(query=query)
+    intent = SearchIntent(query=query, source="heuristic")
 
     intent.genre = _find_keyword(normalized, GENRE_KEYWORDS)
     intent.mood = _find_keyword(normalized, MOOD_KEYWORDS)
@@ -542,13 +571,13 @@ def _extract_intent_with_rules(query: str) -> SearchIntent:
 def _extract_intent_with_gemini(
     query: str,
 ) -> Tuple[Optional[SearchIntent], Optional[str]]:
+    api_key = _get_gemini_api_key()
+    if not api_key:
+        return None, "Gemini intent parsing unavailable: no API key configured."
+
     guardrail_note = _guardrail_before_llm_call()
     if guardrail_note is not None:
         return None, guardrail_note
-
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        return None, "Gemini intent parsing unavailable: no API key configured."
 
     try:
         import urllib.error
@@ -571,11 +600,7 @@ def _extract_intent_with_gemini(
     )
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.0,
-            "maxOutputTokens": 512,
-            "responseMimeType": "application/json",
-        },
+        "generationConfig": _intent_generation_config(),
     }
     request = urllib.request.Request(
         url,
@@ -606,13 +631,13 @@ def _extract_intent_with_gemini(
 def _propose_refinement_with_gemini(
     state: RecommendationState, user_feedback: str
 ) -> Tuple[Optional[RefinementPlan], Optional[str]]:
+    api_key = _get_gemini_api_key()
+    if not api_key:
+        return None, "Gemini refinement unavailable: no API key configured."
+
     guardrail_note = _guardrail_before_llm_call()
     if guardrail_note is not None:
         return None, guardrail_note
-
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        return None, "Gemini refinement unavailable: no API key configured."
 
     try:
         import urllib.error
@@ -641,11 +666,7 @@ def _propose_refinement_with_gemini(
     )
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.0,
-            "maxOutputTokens": 512,
-            "responseMimeType": "application/json",
-        },
+        "generationConfig": _refinement_generation_config(),
     }
     request = urllib.request.Request(
         url,
@@ -778,35 +799,144 @@ def _extract_response_text(data: Dict) -> Optional[str]:
     return None
 
 
+def _intent_generation_config() -> Dict[str, object]:
+    return {
+        "temperature": 0.0,
+        "maxOutputTokens": 1024,
+        "thinkingConfig": {"thinkingBudget": 0},
+        "responseMimeType": "application/json",
+        "responseSchema": {
+            "type": "OBJECT",
+            "properties": {
+                "genre": {
+                    "type": "STRING",
+                    "enum": list(GENRE_KEYWORDS),
+                    "nullable": True,
+                },
+                "mood": {
+                    "type": "STRING",
+                    "enum": list(MOOD_KEYWORDS),
+                    "nullable": True,
+                },
+                "energy": {"type": "NUMBER", "nullable": True},
+                "acousticness": {"type": "NUMBER", "nullable": True},
+                "tempo_bpm": {"type": "NUMBER", "nullable": True},
+                "danceability": {"type": "NUMBER", "nullable": True},
+                "valence": {"type": "NUMBER", "nullable": True},
+                "avoid_intense": {"type": "BOOLEAN"},
+                "prefer_chill": {"type": "BOOLEAN"},
+                "prefer_acoustic": {"type": "BOOLEAN"},
+                "confidence": {"type": "NUMBER"},
+                "clarification_type": {
+                    "type": "STRING",
+                    "enum": list(CLARIFICATION_TYPES),
+                    "nullable": True,
+                },
+                "clarifying_question": {"type": "STRING", "nullable": True},
+            },
+        },
+    }
+
+
+def _refinement_generation_config() -> Dict[str, object]:
+    return {
+        "temperature": 0.0,
+        "maxOutputTokens": 1024,
+        "thinkingConfig": {"thinkingBudget": 0},
+        "responseMimeType": "application/json",
+        "responseSchema": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {"type": "STRING", "enum": ["clarify", "refine", "finalize"]},
+                "suggested_updates": {"type": "OBJECT"},
+                "weight_hints": {"type": "OBJECT"},
+                "clarification_type": {
+                    "type": "STRING",
+                    "enum": list(CLARIFICATION_TYPES),
+                    "nullable": True,
+                },
+                "confidence": {"type": "NUMBER"},
+                "reason": {"type": "STRING"},
+            },
+        },
+    }
+
+
 def _parse_json_object(text: str) -> Optional[Dict]:
     cleaned = text.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
         cleaned = re.sub(r"\s*```$", "", cleaned)
     try:
-        return json.loads(cleaned)
+        parsed = json.loads(cleaned)
+        return parsed if isinstance(parsed, dict) else None
     except json.JSONDecodeError:
         match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
         if not match:
             return None
         try:
-            return json.loads(match.group(0))
+            parsed = json.loads(match.group(0))
+            return parsed if isinstance(parsed, dict) else None
         except json.JSONDecodeError:
             return None
 
 
+def _get_gemini_api_key() -> Optional[str]:
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if api_key:
+        return api_key
+
+    if _to_bool(os.getenv("VIBEFINDER_SKIP_DOTENV")):
+        return None
+
+    for env_path in _candidate_env_paths():
+        api_key = _read_env_file_value(env_path, ("GEMINI_API_KEY", "GOOGLE_API_KEY"))
+        if api_key:
+            return api_key
+    return None
+
+
+def _candidate_env_paths() -> List[str]:
+    paths: List[str] = []
+    for base_path in (os.getcwd(), os.path.dirname(os.path.dirname(__file__))):
+        env_path = os.path.join(base_path, ".env")
+        if env_path not in paths:
+            paths.append(env_path)
+    return paths
+
+
+def _read_env_file_value(path: str, keys: Sequence[str]) -> Optional[str]:
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+
+                key, raw_value = line.split("=", 1)
+                if key.strip() not in keys:
+                    continue
+
+                value = raw_value.strip().strip("\"'")
+                if value:
+                    return value
+    except OSError:
+        return None
+    return None
+
+
 def _intent_from_mapping(query: str, mapping: Dict) -> SearchIntent:
-    intent = SearchIntent(query=query)
-    intent.genre = _normalize(mapping.get("genre")) or None
-    intent.mood = _normalize(mapping.get("mood")) or None
+    intent = SearchIntent(query=query, source="llm", llm_json=dict(mapping))
+    intent.genre = _normalize_category(mapping.get("genre"), GENRE_KEYWORDS)
+    intent.mood = _normalize_category(mapping.get("mood"), MOOD_KEYWORDS)
     intent.energy = _bounded_float(mapping.get("energy"))
     intent.acousticness = _bounded_float(mapping.get("acousticness"))
     intent.tempo_bpm = _positive_float(mapping.get("tempo_bpm"))
     intent.danceability = _bounded_float(mapping.get("danceability"))
     intent.valence = _bounded_float(mapping.get("valence"))
-    intent.avoid_intense = bool(mapping.get("avoid_intense", False))
-    intent.prefer_chill = bool(mapping.get("prefer_chill", False))
-    intent.prefer_acoustic = bool(mapping.get("prefer_acoustic", False))
+    intent.avoid_intense = _to_bool(mapping.get("avoid_intense")) or False
+    intent.prefer_chill = _to_bool(mapping.get("prefer_chill")) or False
+    intent.prefer_acoustic = _to_bool(mapping.get("prefer_acoustic")) or False
     intent.confidence = _bounded_float(mapping.get("confidence")) or 0.5
     clarification_type = _normalize(mapping.get("clarification_type") or "")
     if clarification_type not in CLARIFICATION_TYPE_QUESTIONS:
@@ -978,6 +1108,8 @@ def _guardrail_before_llm_call() -> Optional[str]:
 def _clone_intent(intent: SearchIntent) -> SearchIntent:
     return SearchIntent(
         query=intent.query,
+        source=intent.source,
+        llm_json=dict(intent.llm_json) if intent.llm_json is not None else None,
         genre=intent.genre,
         mood=intent.mood,
         energy=intent.energy,
@@ -1034,8 +1166,30 @@ def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", text.lower()).strip()
 
 
+def _normalize_category(value: object, allowed_values: Sequence[str]) -> Optional[str]:
+    normalized = _normalize(value)
+    if normalized in allowed_values:
+        return normalized
+    return None
+
+
 def _normalize(value: object) -> str:
     return str(value).strip().lower()
+
+
+def _to_bool(value: object) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = _normalize(value)
+        if normalized in {"true", "yes", "y", "1"}:
+            return True
+        if normalized in {"false", "no", "n", "0"}:
+            return False
+        return None
+    if value is None:
+        return None
+    return bool(value)
 
 
 def _to_float(value: object) -> Optional[float]:

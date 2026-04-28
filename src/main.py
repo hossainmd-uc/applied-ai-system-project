@@ -20,19 +20,25 @@ def main() -> None:
 
     while True:
         print("\nVibeFinder")
-        print("1) Quick Recommend")
-        print("2) Guided Agent")
-        print("3) Exit")
+        print("1) Quick Recommend (Heuristic)")
+        print("2) Guided Agent (Heuristic)")
+        print("3) Quick Recommend (LLM)")
+        print("4) Guided Agent (LLM)")
+        print("5) Exit")
 
         choice = input("Choose an option: ").strip()
         if choice == "1":
-            run_quick_recommendation(songs)
+            run_quick_recommendation(songs, intent_mode="heuristic")
         elif choice == "2":
-            run_guided_agent(songs)
+            run_guided_agent(songs, intent_mode="heuristic")
         elif choice == "3":
+            run_quick_recommendation(songs, intent_mode="llm")
+        elif choice == "4":
+            run_guided_agent(songs, intent_mode="llm")
+        elif choice == "5":
             break
         else:
-            print("Please choose 1, 2, or 3.")
+            print("Please choose 1, 2, 3, 4, or 5.")
 
 
 if __name__ == "__main__":
