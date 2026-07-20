@@ -1,4 +1,4 @@
-# Research Prompt Log
+# Research Prompt Log 
 
 ## 1. Streaming recommender systems
 
