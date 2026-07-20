@@ -177,6 +177,6 @@ Phase 3 is complete when:
 
 By the end of Phase 3, VibeFinder will remain a transparent, explainable recommender while adding practical AI interaction capabilities:
 
-- RAG improves natural language usability,
+- RAG improves natural language usability, 
 - Agentic flow improves iterative personalization,
 - and one unified architecture keeps the system maintainable.
