@@ -1,4 +1,4 @@
-# Phase 3: RAG + Agentic TUI Integration Plan
+# Phase 3: RAG + Agentic TUI Integration Plan 
 
 ## Phase 3 Goal
 
